@@ -6,140 +6,233 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <cstring>
-#include <iomanip>  // Para formatar a tabela
+#include <iomanip>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 using namespace std;
 
-void listarProcessos(const string& filtro) {
-    string comando = "ps --no-header -eo comm,%cpu,etime,nlwp,psr,pid,user";
+mutex mtx;
+atomic<bool> atualizando(true);
+atomic<bool> filtroAtivo(false);
+atomic<bool> comandoAtivo(false);
+string filtroAtual;
 
-    // Incluir filtro, se houver
-    if (!filtro.empty()) {
-        comando += " | grep -i " + filtro;  // A opção -i torna a busca sem sensibilidade a maiúsculas/minúsculas
+void listarProcessos(const string &filtro) {
+  string comando = "ps --no-header -eo comm,%cpu,etime,nlwp,psr,pid,user,pri,ni";
+
+
+  // Incluir filtro, se houver
+  if (!filtro.empty()) {
+    comando += " | grep -i " + filtro;
+  }
+
+  // Limpar tela para exibir a lista atualizada
+  system("clear");
+
+  // Mostrar o cabeçalho da tabela
+  cout << left << setw(20) << "Nome do Processo"
+     << setw(7) << "% CPU"
+     << setw(18) << "Tempo Atividade"
+     << setw(9) << "Threads"
+     << setw(9) << "CPU"
+     << setw(9) << "PID"
+     << setw(9) << "PRI"  
+     << setw(9) << "NI"    
+     << setw(20) << "Usuário" << endl;
+
+  // Separação das colunas
+  cout << string(95, '-') << endl;
+
+  // Executar o comando para listar os processos
+  FILE *fp = popen(comando.c_str(), "r");
+  if (fp == nullptr) {
+    perror("Erro ao executar comando");
+    return;
+  }
+
+  // Exibir os dados de cada processo
+  char nome[256], cpu[10], tempo[20], threads[10], cpuNum[10], pid[10], usuario[256], pri[10], ni[10];
+while (fscanf(fp, "%s %s %s %s %s %s %s %s %s\n", nome, cpu, tempo, threads, cpuNum, pid, usuario, pri, ni) != EOF) {
+    cout << setw(20) << nome
+         << setw(10) << cpu
+         << setw(15) << tempo
+         << setw(10) << threads
+         << setw(10) << cpuNum
+         << setw(10) << pid
+         << setw(10) << pri
+         << setw(10) << ni
+         << setw(20) << usuario << endl;
+}
+
+  fclose(fp);
+}
+
+void exibirLegenda() {
+  // Legenda abaixo da tabela
+  cout << "========================================\n";
+  cout << "Menu:\n";
+  cout << "0 - Filtrar processos.\n";
+  cout << "1 - Matar um processo.\n";
+  cout << "2 - Suspender um processo.\n";
+  cout << "3 - Continuar um processo.\n";
+  cout << "4 - Definir afinidade de CPU.\n";
+  cout << "5 - Alterar a prioridade.\n";
+  cout << "6 - Atualizar lista.\n";
+  cout << "7 - Sair.\n";
+  cout << "========================================\n";
+}
+
+void atualizarLista() {
+  while (atualizando) {
+    this_thread::sleep_for(chrono::seconds(1));
+
+    if (!filtroAtivo && !comandoAtivo) {
+      lock_guard<mutex> lock(mtx);
+      listarProcessos(filtroAtual);
+      exibirLegenda();
     }
-
-    // Mostrar o cabeçalho da tabela
-    cout << left << setw(20) << "Nome do Processo"
-         << setw(10) << "% CPU"
-         << setw(15) << "Tempo de Atividade"
-         << setw(10) << "Threads"
-         << setw(10) << "CPU"
-         << setw(10) << "PID"
-         << setw(20) << "Usuário" << endl;
-
-    // Separação das colunas
-    cout << string(95, '-') << endl;
-
-    // Executar o comando para listar os processos
-    system(comando.c_str());
-
-    // Exibindo a % de uso da GPU, caso tenha uma GPU NVIDIA
-    cout << "\nUso de GPU (se disponível):\n";
+  }
 }
 
 void matarProcesso(int pid) {
-    if (kill(pid, SIGKILL) == -1) {
-        perror("Erro ao matar o processo");
-    } else {
-        cout << "Processo " << pid << " finalizado." << endl;
-    }
+  comandoAtivo = true;
+  if (kill(pid, SIGKILL) == -1) {
+    perror("Erro ao matar o processo");
+  } else {
+    cout << "⚰ | Processo " << pid << " morto." << endl;
+  }
+  comandoAtivo = false;
 }
 
 void suspenderProcesso(int pid) {
-    if (kill(pid, SIGSTOP) == -1) {
-        perror("Erro ao suspender o processo");
-    } else {
-        cout << "Processo " << pid << " suspenso." << endl;
-    }
+  comandoAtivo = true;
+  if (kill(pid, SIGSTOP) == -1) {
+    perror("Erro ao suspender o processo");
+  } else {
+    cout << "Processo " << pid << " suspenso." << endl;
+  }
+  comandoAtivo = false;
 }
 
 void continuarProcesso(int pid) {
-    if (kill(pid, SIGCONT) == -1) {
-        perror("Erro ao continuar o processo");
-    } else {
-        cout << "Processo " << pid << " retomado." << endl;
-    }
+  comandoAtivo = true;
+  if (kill(pid, SIGCONT) == -1) {
+    perror("Erro ao continuar o processo");
+  } else {
+    cout << "Processo " << pid << " sobrevive..." << endl;
+  }
+  comandoAtivo = false;
 }
 
 void alterarCPU(int pid, int cpu) {
-    cpu_set_t mask;
-    CPU_ZERO(&mask);
-    CPU_SET(cpu, &mask);
-    if (sched_setaffinity(pid, sizeof(mask), &mask) == -1) {
-        perror("Erro ao alterar afinidade de CPU");
-    } else {
-        cout << "Processo " << pid << " movido para CPU " << cpu << "." << endl;
-    }
+  comandoAtivo = true;
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  CPU_SET(cpu, &mask);
+  if (sched_setaffinity(pid, sizeof(mask), &mask) == -1) {
+    perror("Erro ao alterar afinidade de CPU");
+  } else {
+    cout << "Processo " << pid << " movido para CPU " << cpu << "." << endl;
+  }
+  comandoAtivo = false;
 }
 
 void alterarPrioridade(int pid, int prioridade) {
-    if (setpriority(PRIO_PROCESS, pid, prioridade) == -1) {
-        perror("Erro ao alterar prioridade");
-    } else {
-        cout << "Prioridade do processo " << pid << " alterada para " << prioridade << "." << endl;
-    }
+  comandoAtivo = true;
+  if (setpriority(PRIO_PROCESS, pid, prioridade) == -1) {
+    perror("Erro ao alterar prioridade");
+  } else {
+    cout << "Prioridade do processo " << pid << " alterada para " << prioridade << "." << endl;
+  }
+  comandoAtivo = false;
 }
 
 int main() {
-    int opcao, pid, cpu, prioridade;
-    string filtro;
+  int opcao, pid, cpu, prioridade;
+  string filtro;
 
-    while (true) {
-        cout << "\nGerenciador de Tarefas - Menu de Opções:\n";
-        cout << "1. Listar Processos\n";
-        cout << "2. Matar Processo\n";
-        cout << "3. Suspender Processo\n";
-        cout << "4. Continuar Processo\n";
-        cout << "5. Alterar CPU de Processo\n";
-        cout << "6. Alterar Prioridade de Processo\n";
-        cout << "0. Sair\n";
-        cout << "Escolha uma opção: ";
-        cin >> opcao;
+  thread atualizacaoThread(atualizarLista);
 
-        switch (opcao) {
-            case 1:
-                cout << "Digite um filtro (opcional): ";
-                cin.ignore();
-                getline(cin, filtro);
-                listarProcessos(filtro);
-                break;
-            case 2:
-                cout << "Digite o PID do processo a ser matado: ";
-                cin >> pid;
-                matarProcesso(pid);
-                break;
-            case 3:
-                cout << "Digite o PID do processo a ser suspenso: ";
-                cin >> pid;
-                suspenderProcesso(pid);
-                break;
-            case 4:
-                cout << "Digite o PID do processo a ser retomado: ";
-                cin >> pid;
-                continuarProcesso(pid);
-                break;
-            case 5:
-                cout << "Digite o PID do processo: ";
-                cin >> pid;
-                cout << "Digite o número da CPU (0-7): ";
-                cin >> cpu;
-                alterarCPU(pid, cpu);
-                break;
-            case 6:
-                cout << "Digite o PID do processo: ";
-                cin >> pid;
-                cout << "Digite a prioridade (-20 a 19): ";
-                cin >> prioridade;
-                alterarPrioridade(pid, prioridade);
-                break;
-            case 0:
-                cout << "Saindo...\n";
-                return 0;
-            default:
-                cout << "Opção inválida! Tente novamente.\n";
-                break;
-        }
+  exibirLegenda(); // Exibir a legenda no início
+
+  while (true) {
+    cout << "\nEscolha uma opção (0 a 7): ";
+    cin >> opcao;
+    cin.ignore(); // Limpar o buffer do teclado
+
+    if (opcao < 0 || opcao > 7) {
+      cout << "Opção inválida! Tente novamente.\n";
+      continue;
     }
 
-    return 0;
+    switch (opcao) {
+      case 0:
+        filtroAtivo = true;
+        cout << "--> Configurar filtro:\n";
+        cout << "Digite o filtro: ";
+        getline(cin, filtro);
+        {
+          lock_guard<mutex> lock(mtx);
+          filtroAtual = filtro;
+        }
+        filtroAtivo = false;
+        break;
+      case 1:
+        filtroAtivo = true;
+        cout << "--> Configurar processo para matar:\n";
+        cout << "Digite o PID para matar: ";
+        cin >> pid;
+        matarProcesso(pid);
+        cin.ignore();
+        break;
+      case 2:
+        filtroAtivo = true;
+        cout << "--> Configurar processo para suspender:\n";
+        cout << "Digite o PID para suspender: ";
+        cin >> pid;
+        suspenderProcesso(pid);
+        filtroAtivo = false;
+        cin.ignore();
+        break;
+      case 3:
+        filtroAtivo = true;
+        cout << "--> Configurar processo para continuar:\n";
+        cout << "Digite o PID para continuar: ";
+        cin >> pid;
+        continuarProcesso(pid);
+        filtroAtivo = false;
+        cin.ignore();
+        break;
+      case 4:
+        filtroAtivo = true;
+        cout << "--> Configurar afinidade de CPU:\n";
+        cout << "Digite o PID: ";
+        cin >> pid;
+        cout << "Digite a CPU: ";
+        cin >> cpu;
+        alterarCPU(pid, cpu);
+        filtroAtivo = false;
+        cin.ignore();
+        break;
+      case 5:
+        filtroAtivo = true;
+        cout << "--> Configurar prioridade de um processo:\n";
+        cout << "Digite o PID: ";
+        cin >> pid;
+        cout << "Digite a prioridade: ";
+        cin >> prioridade;
+        alterarPrioridade(pid, prioridade);
+        filtroAtivo = false;
+        cin.ignore();
+        break;
+      case 6:
+        break; // Atualizar lista automaticamente já está sendo feito pela thread
+      case 7:
+        atualizando = false;
+        atualizacaoThread.join();
+        return 0;
+    }
+  }
 }
